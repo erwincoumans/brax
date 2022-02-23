@@ -17,7 +17,8 @@
 
 from typing import Tuple
 
-import jax.numpy as jnp
+#import jax.numpy as jnp
+import numpy as jnp
 
 from brax.physics.base import QP
 
@@ -56,10 +57,39 @@ def rotate(vec: jnp.ndarray, quat: jnp.ndarray):
 
   u = quat[1:]
   s = quat[0]
+  
+  if s.__class__==list:
+    breakpoint()
+    
   return 2 * (jnp.dot(u, vec) *
               u) + (s * s - jnp.dot(u, u)) * vec + 2 * s * jnp.cross(u, vec)
 
 
+def segment_sum(vec, idx, count=-1):
+      values, counts = jnp.unique(idx, return_counts=True)
+      index = 0
+      seg=[]
+      
+      for i_ in range(len(counts)):
+        i = counts[i_]
+        sum = vec[index]
+        index += 1
+        for j in range(i-1):
+          sum += vec[index]
+          index += 1
+        
+        seg.append(sum)  
+        
+      
+      
+      
+      while i_<count-1:
+        seg.append(vec[0]*0)
+        i_+=1
+      seg = jnp.array(seg)
+      
+      return seg
+      
 def inv_rotate(vec: jnp.ndarray, quat: jnp.ndarray):
   """Rotates a vector by the inverse of a unit quaternion.
 
@@ -123,6 +153,7 @@ def to_world(qp: QP, rpos: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
       * World-space coordinates of rpos
       * World-space velocity of rpos
   """
+  
   rpos_off = rotate(rpos, qp.rot)
   rvel = jnp.cross(qp.ang, rpos_off)
   return (qp.pos + rpos_off, qp.vel + rvel)

@@ -18,16 +18,19 @@
 import itertools
 from typing import List, Tuple
 
-from flax import struct
-import jax
-from jax import ops
-import jax.numpy as jnp
+#from flax import struct
+#import jax
+#from jax import ops
+#import jax.numpy as jnp
+import numpy as jnp
 
+from brax.physics.bodies import take_bodies
 from brax.physics import bodies
 from brax.physics import config_pb2
 from brax.physics import math
-from brax.physics.base import P, QP, euler_to_quat, vec_to_np, take
+from brax.physics.base import P, QP, euler_to_quat, vec_to_np, take_qp
 from brax.physics.math import safe_norm
+from brax.physics.math import segment_sum
 
 
 class BoxPlane:
@@ -60,8 +63,8 @@ class BoxPlane:
         corners.append(corner)
 
     body = bodies.Body.from_config(config)
-    self.box = take(body, jnp.array(box_idxs))
-    self.plane = take(body, jnp.array(plane_idxs))
+    self.box = take_bodies(body, jnp.array(box_idxs))
+    self.plane = take_bodies(body, jnp.array(plane_idxs))
     self.corner = jnp.array(corners)
 
   def apply(self, qp: QP, dt: float) -> P:
@@ -82,7 +85,7 @@ class BoxPlane:
     if not self.pairs:
       return P(jnp.zeros_like(qp.vel), jnp.zeros_like(qp.ang))
 
-    @jax.vmap
+    #@jax.vmap
     def apply(box, corner, qp_box, qp_plane):
       pos, vel = math.to_world(qp_box, corner)
       normal = math.rotate(jnp.array([0.0, 0.0, 1.0]), qp_plane.rot)
@@ -91,15 +94,17 @@ class BoxPlane:
       collided = jnp.where(penetration < 0., 1., 0.)
       return dp, collided
 
-    qp_box = take(qp, self.box.idx)
-    qp_plane = take(qp, self.plane.idx)
+    qp_box = take_bodies(qp, self.box.idx)
+    qp_plane = take_bodies(qp, self.plane.idx)
     dp, colliding = apply(self.box, self.corner, qp_box, qp_plane)
 
     # collapse/sum across all corners
     num_bodies = len(self.config.bodies)
-    colliding = ops.segment_sum(colliding, self.box.idx, num_bodies)
-    vel = ops.segment_sum(dp.vel, self.box.idx, num_bodies)
-    ang = ops.segment_sum(dp.ang, self.box.idx, num_bodies)
+    
+    
+    colliding = segment_sum(colliding, self.box.idx, num_bodies)
+    vel = segment_sum(dp.vel, self.box.idx, num_bodies)
+    ang = segment_sum(dp.ang, self.box.idx, num_bodies)
 
     # equally distribute contact force over each box
     vel = vel / jnp.reshape(1e-8 + colliding, (vel.shape[0], 1))
@@ -154,8 +159,8 @@ class BoxHeightMap:
         meshSizes.append(meshSize)
 
     body = bodies.Body.from_config(config)
-    self.box = take(body, jnp.array(box_idxs))
-    self.heightMap = take(body, jnp.array(heightMap_idxs))
+    self.box = take_bodies(body, jnp.array(box_idxs))
+    self.heightMap = take_bodies(body, jnp.array(heightMap_idxs))
     self.corner = jnp.array(corners)
     self.size = jnp.array(sizes)
     self.meshSize = jnp.array(meshSizes)
@@ -178,7 +183,7 @@ class BoxHeightMap:
     if not self.pairs:
       return P(jnp.zeros_like(qp.vel), jnp.zeros_like(qp.ang))
 
-    @jax.vmap
+    #@jax.vmap
     def apply(box, corner, qp_box, qp_heightMap, size, meshSize, heights):
       world_pos, vel = math.to_world(qp_box, corner)
 
@@ -225,8 +230,8 @@ class BoxHeightMap:
       collided = jnp.where(penetration < 0., 1., 0.)
       return dp, collided
 
-    qp_box = take(qp, self.box.idx)
-    qp_heightMap = take(qp, self.heightMap.idx)
+    qp_box = take_bodies(qp, self.box.idx)
+    qp_heightMap = take_bodies(qp, self.heightMap.idx)
     dp, colliding = apply(self.box, self.corner, qp_box, qp_heightMap,
                           self.size, self.meshSize, self.heights)
 
@@ -282,8 +287,8 @@ class CapsulePlane:
         cap_radius.append(capsule.radius)
 
     body = bodies.Body.from_config(config)
-    self.cap = take(body, jnp.array(cap_idx))
-    self.plane = take(body, jnp.array(plane_idx))
+    self.cap = take_bodies(body, jnp.array(cap_idx))
+    self.plane = take_bodies(body, jnp.array(plane_idx))
     self.cap_end = jnp.array(cap_end)
     self.cap_radius = jnp.array(cap_radius)
 
@@ -305,33 +310,50 @@ class CapsulePlane:
     if not self.pairs:
       return P(jnp.zeros_like(qp.vel), jnp.zeros_like(qp.ang))
 
-    @jax.vmap
-    def apply(cap, cap_end, radius, qp_cap, qp_plane):
-      cap_end_world = qp_cap.pos + math.rotate(cap_end, qp_cap.rot)
-      normal = math.rotate(jnp.array([0.0, 0.0, 1.0]), qp_plane.rot)
-      pos = cap_end_world - normal * radius
-      rpos_off = pos - qp_cap.pos
-      rvel = jnp.cross(qp_cap.ang, rpos_off)
-      vel = qp_cap.vel + rvel
+    
+    #@jax.vmap
+    def apply(cap, cap_endvec, radiusvec, qp_capvec, qp_planevec):
+      
+      dp=P([],[])
+      penetration=[]
+      colliding = []
+      for index in range (len(cap_endvec)):
+        cap_end = cap_endvec[index]
+        radius = radiusvec[index]
 
-      penetration = jnp.dot(pos - qp_plane.pos, normal)
-      dp = _collide(self.config, cap, qp_cap, pos, vel, normal, penetration, dt)
-      colliding = jnp.where(penetration < 0., 1., 0.)
+        cap_end_world = qp_cap.pos[index] + math.rotate(cap_end, qp_cap.rot[index])
+        normal = math.rotate(jnp.array([0.0, 0.0, 1.0]), qp_plane.rot[index])
+        pos = cap_end_world - normal * radius
+        rpos_off = pos - qp_cap.pos[index]
+        rvel = jnp.cross(qp_cap.ang[index], rpos_off)
+        vel = qp_cap.vel[index] + rvel
+
+        penetrationsingle = jnp.dot(pos - qp_plane.pos[index], normal)
+        dpsingle = _collide(self.config, cap, qp_cap, pos, vel, normal, penetrationsingle, dt, index)
+        
+        penetration.append(penetrationsingle)
+        dp.vel.append(dpsingle.vel)
+        dp.ang.append(dpsingle.ang)
+        collidingsingle = jnp.where(penetrationsingle< 0., 1., 0.)
+        colliding.append(collidingsingle)
+      
       return dp, colliding
 
-    qp_cap = take(qp, self.cap.idx)
-    qp_plane = take(qp, self.plane.idx)
+    qp_cap = take_qp(qp, self.cap.idx)
+    qp_plane = take_qp(qp, self.plane.idx)
     dp, colliding = apply(self.cap, self.cap_end, self.cap_radius, qp_cap,
                           qp_plane)
 
     # sum across both contact points
+    
     num_bodies = len(self.config.bodies)
-    colliding = ops.segment_sum(colliding, self.cap.idx, num_bodies)
-    vel = ops.segment_sum(dp.vel, self.cap.idx, num_bodies)
-    ang = ops.segment_sum(dp.ang, self.cap.idx, num_bodies)
-
+    colliding = segment_sum(colliding, self.cap.idx, num_bodies)
+    vel = segment_sum(dp.vel, self.cap.idx, num_bodies)
+    ang = segment_sum(dp.ang, self.cap.idx, num_bodies)
+    
     # equally distribute contact force over possible collision points
-    vel = vel / jnp.reshape(1e-8 + colliding, (vel.shape[0], 1))
+    velres = jnp.reshape(1e-8 + colliding, (vel.shape[0], 1))
+    vel = vel / velres
     ang = ang / jnp.reshape(1e-8 + colliding, (ang.shape[0], 1))
 
     return P(vel, ang)
@@ -340,7 +362,7 @@ class CapsulePlane:
 class CapsuleCapsule:
   """A collision between two capsules."""
 
-  @struct.dataclass
+  #@struct.dataclass
   class Capsule:
     body: bodies.Body
     radius: jnp.ndarray
@@ -369,11 +391,11 @@ class CapsuleCapsule:
 
     body = bodies.Body.from_config(config)
     self.cap_a = CapsuleCapsule.Capsule(
-        body=take(body, jnp.array([a for a, _ in body_idxs])),
+        body=take_bodies(body, jnp.array([a for a, _ in body_idxs])),
         radius=jnp.array([a for a, _ in radii]),
         end=jnp.array([a for a, _ in ends]))
     self.cap_b = CapsuleCapsule.Capsule(
-        body=take(body, jnp.array([b for _, b in body_idxs])),
+        body=take_bodies(body, jnp.array([b for _, b in body_idxs])),
         radius=jnp.array([b for _, b in radii]),
         end=jnp.array([b for _, b in ends]))
 
@@ -431,8 +453,8 @@ class CapsuleCapsule:
                                  qp_b, pos_c, collision_normal, penetration, dt)
       return dp_a, dp_b
 
-    qp_a = take(qp, self.cap_a.body.idx)
-    qp_b = take(qp, self.cap_b.body.idx)
+    qp_a = take_qp(qp, self.cap_a.body.idx)
+    qp_b = take_qp(qp, self.cap_b.body.idx)
     dp_a, dp_b = apply(self.cap_a, self.cap_b, qp_a, qp_b)
 
     num_bodies = len(self.config.bodies)
@@ -487,7 +509,7 @@ def _find_body_pairs(
 
 def _collide(config: config_pb2.Config, body: bodies.Body, qp: QP,
              pos_c: jnp.ndarray, vel_c: jnp.ndarray, normal_c: jnp.ndarray,
-             penetration: float, dt: float) -> P:
+             penetration: float, dt: float, index: int) -> P:
   """Calculates velocity change due to a collision.
 
   Args:
@@ -503,40 +525,48 @@ def _collide(config: config_pb2.Config, body: bodies.Body, qp: QP,
   Returns:
     dP: The impulse on this body result from the collision.
   """
-  rel_pos_a = pos_c - qp.pos
-
+  
+  rel_pos_a = pos_c - qp.pos[index]
   baumgarte_rel_vel = config.baumgarte_erp * penetration / dt
   normal_rel_vel = jnp.dot(normal_c, vel_c)
 
-  temp1 = jnp.matmul(body.inertia, jnp.cross(rel_pos_a, normal_c))
+
+  relposcrossnormal = jnp.cross(rel_pos_a, normal_c)
+
+  
+  temp1 = jnp.matmul(body.inertia[index], relposcrossnormal)
   ang = jnp.dot(normal_c, jnp.cross(temp1, rel_pos_a))
+
   impulse = (-1. *
              (1. + config.elasticity) * normal_rel_vel - baumgarte_rel_vel) / (
-                 (1. / body.mass) + ang)
+                 (1. / body.mass[index]) + ang)
 
-  dp_n = body.impulse(qp, impulse * normal_c, pos_c)
+  dp_n = body.impulse(qp, impulse * normal_c, pos_c, index)
 
   # apply drag due to friction acting parallel to the surface contact
   rel_vel_d = vel_c - normal_rel_vel * normal_c
-  impulse_d = math.safe_norm(rel_vel_d) / ((1. / (body.mass)) + ang)
+  impulse_d = math.safe_norm(rel_vel_d) / ((1. / (body.mass[index])) + ang)
   # drag magnitude cannot exceed max friction
   impulse_d = jnp.where(impulse_d < config.friction * impulse, impulse_d,
                         config.friction * impulse)
   dir_d = rel_vel_d / (1e-6 + math.safe_norm(rel_vel_d))
-  dp_d = body.impulse(qp, -impulse_d * dir_d, pos_c)
+  dp_d = body.impulse(qp, -impulse_d * dir_d, pos_c, index)
 
   # apply collision normal if penetrating, approaching, and oriented correctly
   colliding_n = jnp.where(penetration < 0., 1., 0.)
+  
   colliding_n *= jnp.where(normal_rel_vel < 0, 1., 0.)
+  
   colliding_n *= jnp.where(impulse > 0., 1., 0.)
-
+  
+  
   # apply drag if moving laterally above threshold
-  colliding_d = colliding_n
+  colliding_d = colliding_n.copy()
   colliding_d *= jnp.where(math.safe_norm(rel_vel_d) > (1. / 100.), 1., 0.)
-
+  
   # factor of 2.0 here empirically helps object grip
   # TODO: expose friction physics parameters in config
-  return dp_n * colliding_n + dp_d * colliding_d * 2.0
+  return dp_n * colliding_n + dp_d * colliding_d # * 2.0
 
 
 def _collide_pair(config: config_pb2.Config, body_a: bodies.Body,

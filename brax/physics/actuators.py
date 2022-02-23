@@ -17,22 +17,35 @@
 
 from typing import Tuple
 
-from flax import struct
-import jax
-import jax.numpy as jnp
+#from flax import struct
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
 
 from brax.physics import config_pb2
 from brax.physics import joints
-from brax.physics.base import P, QP, take
+from brax.physics.base import P, QP
+from bodies import take_bodies
 
-
-@struct.dataclass
+##@struct.dataclass
 class Actuator:
   """Applies a torque to a joint."""
   joint: joints.Joint
   strength: jnp.ndarray
   act_idx: jnp.ndarray
-  config: config_pb2.Config = struct.field(pytree_node=False)
+  #config: config_pb2.Config = struct.field(pytree_node=False)
+  config: config_pb2.Config
+
+
+  def __init__(self, joint: joints.Joint,
+                     strength: jnp.ndarray,
+                     act_idx: jnp.ndarray,
+                     config: config_pb2.Config):
+    self.joint = joint
+    self.strength = strength
+    self.act_idx = act_idx
+    self.config = config
+
 
   @classmethod
   def from_config(cls, config: config_pb2.Config,
@@ -52,12 +65,12 @@ class Actuator:
     if not actuators:
       return cls(*[None] * 4)
     joint_idx = jnp.array([joint_map[a.joint] for a in actuators])
-    joint = take(joint, joint_idx)  # ensure joints are in the right order
+    joint = joints.take_joints(joint, joint_idx)  # ensure joints are in the right order
     strength = jnp.array([a.strength for a in actuators])
     act_idx = jnp.array([_act_idx(config, a.name) for a in actuators])
     return cls(joint, strength, act_idx, config)
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, target: jnp.ndarray, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     """Returns calculated impulses in compressed joint space."""
     raise NotImplementedError()  # child must override
@@ -75,8 +88,8 @@ class Actuator:
     if not self.config:
       return P(jnp.zeros_like(qp.vel), jnp.zeros_like(qp.ang))
 
-    qp_p = take(qp, self.joint.body_p.idx)
-    qp_c = take(qp, self.joint.body_c.idx)
+    qp_p = take_qp(qp, self.joint.body_p.idx)
+    qp_c = take_qp(qp, self.joint.body_c.idx)
     target = take(target, self.act_idx)
     dang_p, dang_c = self._apply(target, qp_p, qp_c)
 
@@ -88,11 +101,11 @@ class Actuator:
     return P(vel=jnp.zeros_like(qp.vel), ang=dp_ang)
 
 
-@struct.dataclass
+#@struct.dataclass
 class Angle(Actuator):
   """Applies torque to satisfy a target angle of a joint."""
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, target: jnp.ndarray, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     axis, angle = self.joint.axis_angle(qp_p, qp_c)
     axis, angle = jnp.array(axis), jnp.array(angle)
@@ -109,11 +122,11 @@ class Angle(Actuator):
     return dang_p, dang_c
 
 
-@struct.dataclass
+#@struct.dataclass
 class Torque(Actuator):
   """Applies a target torque to a joint."""
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, target: jnp.ndarray, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     axis, angle = self.joint.axis_angle(qp_p, qp_c)
     axis, angle = jnp.array(axis), jnp.array(angle)

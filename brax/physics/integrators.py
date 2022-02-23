@@ -15,8 +15,9 @@
 # pylint:disable=g-multiple-import
 """A collection of integrators."""
 
-import jax
-import jax.numpy as jnp
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
 from brax.physics import config_pb2
 from brax.physics import math
 from brax.physics.base import P, QP, vec_to_np
@@ -36,15 +37,20 @@ def kinetic(_, qp: QP, dt: float, active_pos: jnp.ndarray,
     State data advanced by one kinematic integration step.
   """
 
-  @jax.vmap
+  #@jax.vmap
   def op(qp: QP, active_pos: jnp.ndarray,
          active_rot: jnp.ndarray) -> QP:
-    pos = qp.pos + qp.vel * dt * active_pos
-    rot_at_ang_quat = math.ang_to_quat(qp.ang * active_rot)
-    rot = jnp.matmul(
-        jnp.matmul(jnp.eye(4) + .5 * dt * rot_at_ang_quat, qp.rot),
-        jnp.eye(4) - .5 * dt * rot_at_ang_quat)
-    rot = rot / jnp.linalg.norm(rot)
+    
+    pos = jnp.array(qp.pos) + jnp.array(qp.vel) * dt * active_pos
+    rot=[]
+    for index in range(len(active_rot)):
+      rot_at_ang_quat = math.ang_to_quat(qp.ang[index] * active_rot[index])
+      tmp = jnp.matmul(jnp.eye(4) + .5 * dt * rot_at_ang_quat, jnp.array(qp.rot[index]))
+      r = jnp.matmul(tmp, jnp.eye(4) - .5 * dt * rot_at_ang_quat)
+      r = r / jnp.linalg.norm(r)
+      rot.append(r)
+      
+    
     return QP(pos=pos, rot=rot, vel=qp.vel, ang=qp.ang)
 
   return op(qp, active_pos, active_rot)
@@ -66,15 +72,22 @@ def potential(config: config_pb2.Config, qp: QP, dp: P, dt: float,
     State data advanced by one potential integration step.
   """
 
-  @jax.vmap
+  
+    
+  #@jax.vmap
   def op(qp: QP, dp: P, active_pos: jnp.ndarray,
          active_rot: jnp.ndarray) -> QP:
+    
     vel = (jnp.exp(config.velocity_damping * dt) * qp.vel +
            (dp.vel + vec_to_np(config.gravity)) * dt) * active_pos
+    
     ang = (jnp.exp(config.angular_damping * dt) * qp.ang +
            dp.ang * dt) * active_rot
+    
+    
     return QP(pos=qp.pos, rot=qp.rot, vel=vel, ang=ang)
 
+  
   return op(qp, dp, active_pos, active_rot)
 
 
@@ -91,11 +104,11 @@ def potential_collision(_, qp: QP, dp: P, active_pos: jnp.ndarray,
   Returns:
     State data advanced by one velocity-level update."""
 
-  @jax.vmap
+  #@jax.vmap
   def op(qp: QP, dp: P, active_pos: jnp.ndarray,
          active_rot: jnp.ndarray) -> QP:
     vel = (qp.vel + dp.vel) * active_pos
     ang = (qp.ang + dp.ang) * active_rot
     return QP(pos=qp.pos, rot=qp.rot, vel=vel, ang=ang)
-
-  return op(qp, dp, active_pos, active_rot)
+  pc = op(qp, dp, active_pos, active_rot)
+  return pc

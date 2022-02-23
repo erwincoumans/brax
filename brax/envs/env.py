@@ -17,13 +17,15 @@
 import abc
 from typing import Dict
 
-from flax import struct
-import jax
-import jax.numpy as jnp
+#from flax import struct
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
+
 import brax
 
 
-@struct.dataclass
+#@struct.dataclass
 class State:
   """Environment state for training and inference."""
   rng: jnp.ndarray

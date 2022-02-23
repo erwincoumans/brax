@@ -14,12 +14,20 @@
 
 # pylint:disable=g-multiple-import
 """A brax system."""
+import os
+import inspect
+currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+parentdir = os.path.dirname(os.path.dirname(currentdir))
+os.sys.path.insert(0, parentdir)
+
 
 import functools
 from typing import Tuple
 
-import jax
-import jax.numpy as jnp
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
+
 from brax.physics import actuators
 from brax.physics import bodies
 from brax.physics import colliders
@@ -66,7 +74,7 @@ class System:
     self.torque_2d = actuators.Torque.from_config(config, self.joint_universal)
     self.torque_3d = actuators.Torque.from_config(config, self.joint_spherical)
 
-  @functools.partial(jax.jit, static_argnums=(0, 1))
+  #@functools.partial(jax.jit, static_argnums=(0, 1))
   def default_qp(self, default_index: int = 0) -> QP:
     """Returns a default state for the system."""
     qps = {}
@@ -82,7 +90,7 @@ class System:
     root = tree.Node.from_config(self.config)
 
     parent_joint = {j.child: j for j in self.config.joints}
-    rot_axes = jax.jit(jax.vmap(math.rotate, in_axes=[0, None]))
+    #rot_axes = jax.jit(jax.vmap(math.rotate, in_axes=[0, None]))
 
     for body in root.depth_first():
       if body.name in default_qps:
@@ -96,7 +104,23 @@ class System:
       elif body.name in parent_joint:
         # pos/rot can be determined if the body is the child of a joint
         joint = parent_joint[body.name]
-        axes = rot_axes(jnp.eye(3), euler_to_quat(joint.rotation))
+        #axes = rot_axes(jnp.eye(3), euler_to_quat(joint.rotation))
+        
+        axis_1 = jnp.round(
+        jnp.array(
+            math.rotate(jnp.array([1,0,0]), euler_to_quat(joint.rotation))),
+        decimals=5)
+        axis_2 = jnp.round(
+            jnp.array(
+                math.rotate(jnp.array([0,1,0]), euler_to_quat(joint.rotation))),
+            decimals=5)
+        axis_3 = jnp.round(
+            jnp.array(
+                math.rotate(jnp.array([0,0,1]), euler_to_quat(joint.rotation))),
+            decimals=5)
+        axes = jnp.array([axis_1,axis_2,axis_3])
+        
+        
         if joint.name in default_angles:
           angles = vec_to_np(default_angles[joint.name].angle) * jnp.pi / 180
         else:
@@ -134,12 +158,27 @@ class System:
       for body in children:
         qp = qps[body]
         pos = qp.pos - min_z * jnp.array([0., 0., 1.])
-        qps[body] = qp.replace(pos=pos)
-
+        tmp = qp
+        tmp.pos = pos
+        #qps[body] = qp
+        qps[body] = tmp
+    
     qps = [qps[body.name] for body in self.config.bodies]
-    return jax.tree_multimap((lambda *args: jnp.stack(args)), *qps)
+    qps_ = QP([],[],[],[])
+    for q_ in qps:
+      qps_.pos.append(q_.pos)#.tolist())
+      qps_.rot.append(q_.rot)#.tolist())
+      qps_.vel.append(q_.vel)#.tolist())
+      qps_.ang.append(q_.ang)#.tolist())
+    qps_.pos = jnp.array(qps_.pos)
+    qps_.rot = jnp.array(qps_.rot)
+    qps_.vel = jnp.array(qps_.vel)
+    qps_.ang = jnp.array(qps_.ang)
+    
+    return qps_
+    #return jax.tree_multimap((lambda *args: jnp.stack(args)), *qps)
 
-  @functools.partial(jax.jit, static_argnums=(0,))
+  #@functools.partial(jax.jit, static_argnums=(0,))
   def info(self, qp: QP) -> Info:
     """Return info about a system state."""
     dp_c = self.box_plane.apply(qp, 1.)
@@ -156,12 +195,14 @@ class System:
     info = Info(contact=dp_c, joint=dp_j, actuator=dp_a)
     return info
 
-  @functools.partial(jax.jit, static_argnums=(0,))
+  #@functools.partial(jax.jit, static_argnums=(0,))
   def step(self, qp: QP, act: jnp.ndarray) -> Tuple[QP, Info]:
     """Calculates a physics step for a system, returns next state and info."""
 
-    def substep(carry, _):
-      qp, info = carry
+    def substep(qp, info):
+      
+      #def substep(carry, _):
+      #qp, info = carry
       dt = self.config.dt / self.config.substeps
 
       # apply kinetic step
@@ -180,23 +221,35 @@ class System:
       dp_a += self.torque_3d.apply(qp, act)
       qp = integrators.potential(self.config, qp, dp_j + dp_a, dt,
                                  self.active_pos, self.active_rot)
-
+      
       # apply collision velocity updates
       dp_c = self.box_plane.apply(qp, dt)
+      
       dp_c += self.box_heightMap.apply(qp, dt)
+      
       dp_c += self.capsule_plane.apply(qp, dt)
+      
+      
+      
       dp_c += self.capsule_capsule.apply(qp, dt)
+      
       qp = integrators.potential_collision(self.config, qp, dp_c,
-                                           self.active_pos, self.active_rot)
+                                             self.active_pos, self.active_rot)
 
+      
       info = Info(
           contact=info.contact + dp_c,
           joint=info.joint + dp_j,
           actuator=info.actuator + dp_a)
 
-      return (qp, info), ()
+      #return (qp, info), ()
+      return (qp, info)
 
     zero = P(jnp.zeros((self.num_bodies, 3)), jnp.zeros((self.num_bodies, 3)))
     info = Info(contact=zero, joint=zero, actuator=zero)
-    (qp, info), _ = jax.lax.scan(substep, (qp, info), (), self.config.substeps)
+    #(qp, info), _ = jax.lax.scan(substep, (qp, info), (), self.config.substeps)
+    
+    for step in range (self.config.substeps):
+      
+      qp, info = substep(qp, info)
     return qp, info

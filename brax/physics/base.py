@@ -14,13 +14,14 @@
 
 """Core brax structs and some conversion and slicing functions."""
 
-from flax import struct
-import jax
-import jax.numpy as jnp
+#from flax import struct
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
 from brax.physics import config_pb2
 
 
-@struct.dataclass
+#@struct.dataclass
 class Q(object):
   """Coordinates: position and rotation.
 
@@ -42,7 +43,7 @@ class Q(object):
       raise ValueError("add only supported for P, Q, QP")
 
 
-@struct.dataclass
+#@struct.dataclass
 class P(object):
   """Time derivatives: velocity and angular velocity.
 
@@ -53,6 +54,12 @@ class P(object):
   vel: jnp.ndarray
   ang: jnp.ndarray
 
+
+  def __init__(self, vel: jnp.ndarray,ang: jnp.ndarray):
+    self.vel = vel
+    self.ang = ang
+  
+  
   def __add__(self, o):
     if isinstance(o, P):
       return P(self.vel + o.vel, self.ang + o.ang)
@@ -67,7 +74,7 @@ class P(object):
     return P(self.vel * o, self.ang * o)
 
 
-@struct.dataclass
+#@struct.dataclass
 class QP(object):
   """A coordinate and time derivative frame for a brax body.
 
@@ -82,6 +89,12 @@ class QP(object):
   vel: jnp.ndarray
   ang: jnp.ndarray
 
+  def __init__(self, pos: jnp.ndarray, rot: jnp.ndarray,vel: jnp.ndarray,ang: jnp.ndarray):
+    self.pos = pos
+    self.rot = rot
+    self.vel = vel
+    self.ang = ang
+    
   def __add__(self, o):
     if isinstance(o, P):
       return QP(self.pos, self.rot, self.vel + o.vel, self.ang + o.ang)
@@ -105,7 +118,22 @@ class QP(object):
         ang=jnp.zeros(3))
 
 
-@struct.dataclass
+    
+    
+      
+def take_qp(objects, i: jnp.ndarray, axis=0):
+  """Returns objects sliced by i."""
+  qp = QP([],[],[],[])
+  for i_ in i:
+    qp.pos.append(objects.pos[i_])
+    qp.rot.append(objects.rot[i_])
+    qp.vel.append(objects.vel[i_])
+    qp.ang.append(objects.ang[i_])
+    
+    
+  return qp
+  
+#@struct.dataclass
 class Info(object):
   """Auxilliary data calculated during the dynamics of each physics step.
 
@@ -117,6 +145,10 @@ class Info(object):
   contact: P
   joint: P
   actuator: P
+  def __init__(self, contact: P, joint: P,  actuator: P):
+    self.contact = contact
+    self.joint = joint
+    self.actuator = actuator
 
 
 def vec_to_np(v):
@@ -139,11 +171,12 @@ def euler_to_quat(v):
   return jnp.array([w, x, y, z])
 
 
-def take(objects, i: jnp.ndarray, axis=0):
-  """Returns objects sliced by i."""
-  flat_data, py_tree_def = jax.tree_flatten(objects)
-  sliced_data = [jnp.take(k, i, axis=axis, mode="clip") for k in flat_data]
-  return jax.tree_unflatten(py_tree_def, sliced_data)
+
+#def take(objects, i: jnp.ndarray, axis=0):
+#  """Returns objects sliced by i."""
+#  flat_data, py_tree_def = jax.tree_flatten(objects)
+#  sliced_data = [jnp.take(k, i, axis=axis, mode="clip") for k in flat_data]
+#  return jax.tree_unflatten(py_tree_def, sliced_data)
 
 
 def validate_config(config: config_pb2.Config) -> config_pb2.Config:

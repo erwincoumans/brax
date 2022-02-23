@@ -16,7 +16,13 @@
 
 __version__ = '0.0.4'
 
+import os, inspect
+currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+parentdir = os.path.dirname(currentdir)
+os.sys.path.insert(0, parentdir)
+
 from brax.physics.base import Info
 from brax.physics.base import QP
 from brax.physics.config_pb2 import Config
 from brax.physics.system import System
+

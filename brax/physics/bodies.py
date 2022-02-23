@@ -15,15 +15,16 @@
 # pylint:disable=g-multiple-import
 """Functionality for brax bodies."""
 
-from flax import struct
-import jax
-import jax.numpy as jnp
+#from flax import struct
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
 
 from brax.physics import config_pb2
 from brax.physics import math
 from brax.physics.base import P, QP, euler_to_quat, vec_to_np
 
-@struct.dataclass
+#@struct.dataclass
 class Body(object):
   """A body is a solid, non-deformable object with some mass and shape.
 
@@ -38,23 +39,40 @@ class Body(object):
   mass: jnp.ndarray
   active: jnp.ndarray
 
+  def __init__(self, idx, inertia, mass, active):
+    self.idx = idx
+    self.inertia = inertia
+    self.mass = mass
+    self.active = active
+    
   @classmethod
   def from_config(cls, config: config_pb2.Config) -> 'Body':
     """Returns Body from a brax config."""
-    bodies = []
+    #bodies = []
+    b = Body([],[],[],[])
+    
     for idx, body in enumerate(config.bodies):
       frozen = jnp.sum(
           vec_to_np(body.frozen.position) + vec_to_np(body.frozen.rotation))
-      bodies.append(
-          cls(
-              idx=jnp.array(idx),
-              inertia=jnp.linalg.inv(jnp.diag(vec_to_np(body.inertia))),
-              mass=jnp.array(body.mass),
-              active=jnp.array(jnp.sum(frozen) != 6),
-          ))
-    return jax.tree_multimap((lambda *args: jnp.stack(args)), *bodies)
+      #bodies.append(
+      #    cls(
+      #        idx=jnp.array(idx),
+      #        inertia=jnp.linalg.inv(jnp.diag(vec_to_np(body.inertia))),
+      #        mass=jnp.array(body.mass),
+      #        active=jnp.array(jnp.sum(frozen) != 6),
+      #    ))
+      b.idx.append(idx)
+      b.inertia.append(jnp.linalg.inv(jnp.diag(vec_to_np(body.inertia))))
+      b.mass.append(body.mass)
+      b.active.append(jnp.sum(frozen) != 6)
+          
+    #print("bodies=",bodies)
+    #print("Body from_config=",b.idx)
+    return b
+    #return jax.tree_multimap((lambda *args: jnp.stack(args)), *bodies)
+    #return map((lambda *args: jnp.stack(args)), *bodies)
 
-  def impulse(self, qp: QP, impulse: jnp.ndarray, pos: jnp.ndarray) -> P:
+  def impulse(self, qp: QP, impulse: jnp.ndarray, pos: jnp.ndarray, index: int) -> P:
     """Calculates updates to state information based on an impulse.
 
     Args:
@@ -65,8 +83,8 @@ class Body(object):
     Returns:
       dP: An impulse to apply to this body
     """
-    dvel = impulse / self.mass
-    dang = jnp.matmul(self.inertia, jnp.cross(pos - qp.pos, impulse))
+    dvel = impulse / self.mass[index]
+    dang = jnp.matmul(self.inertia[index], jnp.cross(pos - qp.pos[index], impulse))
     return P(vel=dvel, ang=dang)
 
 def min_z(qp: QP, body: config_pb2.Body) -> float:
@@ -101,3 +119,19 @@ def min_z(qp: QP, body: config_pb2.Body) -> float:
       result = jnp.min(jnp.array([result, 0.0]))
 
   return result
+  
+  
+  
+def take_bodies(objects, i: jnp.ndarray, axis=0):
+  """Returns objects sliced by i."""
+  b = Body([],[],[],[])
+  #print("dir objects=",dir(objects))
+  #print("objects=",objects)
+  for idx in i:
+    if idx in objects.idx:
+      i_ = objects.idx.index(idx)
+      b.idx.append(objects.idx[i_])
+      b.inertia.append(objects.inertia[i_])
+      b.mass.append(objects.mass[i_])
+      b.active.append(objects.active[i_])
+  return b  

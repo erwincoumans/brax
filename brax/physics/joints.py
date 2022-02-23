@@ -17,20 +17,22 @@
 
 from typing import Any, Tuple
 
-from flax import struct
-import jax
-import jax.numpy as jnp
+#from flax import struct
+#import jax
+#import jax.numpy as jnp
+import numpy as jnp
 
+from brax.physics.base import take_qp
 from brax.physics import bodies
 from brax.physics import config_pb2
 from brax.physics import math
-from brax.physics.base import P, QP, euler_to_quat, take, vec_to_np
+from brax.physics.base import P, QP, euler_to_quat, vec_to_np
 
 type_to_dof = {"revolute": 1, "universal": 2, "spherical": 3}
 lim_to_dof = {0: 1, 1: 1, 2: 2, 3: 3}
 
 
-@struct.dataclass
+#@struct.dataclass
 class Joint:
   """Connects to bodies together with some axes of rotation."""
   stiffness: jnp.ndarray
@@ -46,13 +48,46 @@ class Joint:
   off_p: jnp.ndarray
   off_c: jnp.ndarray
   ref: jnp.ndarray
-  config: config_pb2.Config = struct.field(pytree_node=False)
+  #config: config_pb2.Config = struct.field(pytree_node=False)
+  config: config_pb2.Config
 
+
+  def __init__(self,  stiffness: jnp.ndarray,
+                      angular_damping: jnp.ndarray,
+                      spring_damping: jnp.ndarray,
+                      limit_strength: jnp.ndarray,
+                      limit: jnp.ndarray,
+                      body_p: bodies.Body,
+                      body_c: bodies.Body,
+                      axis_1: jnp.ndarray,
+                      axis_2: jnp.ndarray,
+                      axis_3: jnp.ndarray,
+                      off_p: jnp.ndarray,
+                      off_c: jnp.ndarray,
+                      ref: jnp.ndarray,
+                      config: config_pb2.Config):
+    self.stiffness = stiffness
+    self.angular_damping = angular_damping
+    self.spring_damping = spring_damping
+    self.limit_strength = limit_strength
+    self.limit = limit
+    self.body_p = body_p
+    self.body_c = body_c
+    self.axis_1 = axis_1
+    self.axis_2 = axis_2
+    self.axis_3 = axis_3
+    self.off_p = off_p
+    self.off_c = off_c
+    self.ref = ref
+    self.config = config
+    if self.stiffness is not None and len(self.stiffness)>0:
+      print("constructed joint! (#=", len(self.stiffness),")")
+    
   @classmethod
   def from_config(cls, config: config_pb2.Config) -> "Joint":
     """Creates a joint from a config."""
     joint_type = cls.__name__.lower()
-
+    
     joints = [
         j for j in config.joints
         if type_to_dof[joint_type] == lim_to_dof[len(j.angle_limit)]
@@ -94,18 +129,33 @@ class Joint:
     # joint bodies
     body_map = {b.name: i for i, b in enumerate(config.bodies)}
     body = bodies.Body.from_config(config)
-    body_p = take(body, jnp.array([body_map[j.parent] for j in joints]))
-    body_c = take(body, jnp.array([body_map[j.child] for j in joints]))
+    body_p = bodies.take_bodies(body, jnp.array([body_map[j.parent] for j in joints]))
+    body_c = bodies.take_bodies(body, jnp.array([body_map[j.child] for j in joints]))
 
     # joint axes
-    v_rot = jax.vmap(math.rotate, in_axes=[0, None])
-    joint_axes = jnp.round(
+    #v_rot = jax.vmap(math.rotate, in_axes=[0, None])
+    #joint_axes = jnp.round(
+    #    jnp.array(
+    #        [v_rot(jnp.eye(3), euler_to_quat(j.rotation)) for j in joints]),
+    #    decimals=5)
+    #axis_1 = joint_axes[:, 0]
+    #axis_2 = joint_axes[:, 1]
+    #axis_3 = joint_axes[:, 2]
+    
+    axis_1 = jnp.round(
         jnp.array(
-            [v_rot(jnp.eye(3), euler_to_quat(j.rotation)) for j in joints]),
+            [math.rotate(jnp.array([1,0,0]), euler_to_quat(j.rotation)) for j in joints]),
         decimals=5)
-    axis_1 = joint_axes[:, 0]
-    axis_2 = joint_axes[:, 1]
-    axis_3 = joint_axes[:, 2]
+    axis_2 = jnp.round(
+        jnp.array(
+            [math.rotate(jnp.array([0,1,0]), euler_to_quat(j.rotation)) for j in joints]),
+        decimals=5)
+    axis_3 = jnp.round(
+        jnp.array(
+            [math.rotate(jnp.array([0,0,1]), euler_to_quat(j.rotation)) for j in joints]),
+        decimals=5)
+      
+      
     if joint_type not in ("revolute", "universal", "spherical"):
       raise RuntimeError(f"joint type not implemented { joint_type }")
 
@@ -124,11 +174,12 @@ class Joint:
         ref_axes[i] = jnp.array([-ax1[2], 0., ax1[0]])
     ref = jnp.array([r / (1e-6 + jnp.linalg.norm(r)) for r in ref_axes])
 
+    print("joint_type=", joint_type)
     return cls(stiffness, angular_damping, spring_damping, limit_strength,
                limit, body_p, body_c, axis_1, axis_2, axis_3, off_p, off_c, ref,
                config)
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     """Returns calculated impulses in compressed joint space."""
     raise NotImplementedError()  # child must override
@@ -145,8 +196,8 @@ class Joint:
     if not self.config:
       return P(jnp.zeros_like(qp.vel), jnp.zeros_like(qp.ang))
 
-    qp_p = take(qp, self.body_p.idx)
-    qp_c = take(qp, self.body_c.idx)
+    qp_p = take_qp(qp, self.body_p.idx)
+    qp_c = take_qp(qp, self.body_c.idx)
     dp_p, dp_c = self._apply(qp_p, qp_c)
 
     # sum together all impulse contributions across parents and children
@@ -199,13 +250,17 @@ class Joint:
     return angles, vels
 
 
-@struct.dataclass
+#@struct.dataclass
 class Revolute(Joint):
   """Connects to bodies together with a single axis of rotation."""
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     """Returns calculated impulses in compressed joint space."""
+    print("self.off_p=",self.off_p)
+    print("self.off_c=",self.off_c)
+    print("qp_p.rot=",qp_p.rot)
+    print("qp_c.rot=",qp_c.rot)
     pos_p, vel_p = math.to_world(qp_p, self.off_p)
     pos_c, vel_c = math.to_world(qp_c, self.off_c)
 
@@ -243,11 +298,11 @@ class Revolute(Joint):
     return (axis_p,), (angle,)
 
 
-@struct.dataclass
+#@struct.dataclass
 class Universal(Joint):
   """Connects to bodies together with two axes of rotation."""
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     """Returns calculated impulses in compressed joint space."""
     pos_p, vel_p = math.to_world(qp_p, self.off_p)
@@ -297,11 +352,11 @@ class Universal(Joint):
     return (axis_2_p, axis_1_c), (angle_1, angle_2)
 
 
-@struct.dataclass
+#@struct.dataclass
 class Spherical(Joint):
   """Connects to bodies together with three axes of rotation."""
 
-  @jax.vmap
+  #@jax.vmap
   def _apply(self, qp_p: QP, qp_c: QP) -> Tuple[P, P]:
     """Returns calculated impulses in compressed joint space."""
     pos_p, vel_p = math.to_world(qp_p, self.off_p)
@@ -375,3 +430,24 @@ class Spherical(Joint):
     angle = (angle_x, angle_y, angle_z)
 
     return axis, angle
+
+def take_joints(objects, i: jnp.ndarray, axis=0):
+  """Returns objects sliced by i."""
+  j = Joint([],[],[],[],[],[],[],[],[],[],[],[],[],[])
+  j.config = objects.config
+  j.body_p = objects.body_p
+  j.body_c = objects.body_c
+      
+  for idx in i:
+      j.stiffness.append(objects.stiffness[i])
+      j.angular_damping.append(objects.angular_damping[i])
+      j.spring_damping.append(objects.spring_damping[i])
+      j.limit_strength.append(objects.limit_strength[i])
+      j.limit.append(objects.limit[i])
+      j.axis_1.append(objects.axis_1[i])
+      j.axis_2.append(objects.axis_2[i])
+      j.axis_3.append(objects.axis_3[i])
+      j.off_p.append(objects.off_p[i])
+      j.off_c.append(objects.off_c[i])
+      j.ref.append(objects.ref[i])
+  return j
